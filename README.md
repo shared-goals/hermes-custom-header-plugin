@@ -237,12 +237,13 @@ plugins:
   backend affinity, and the reviewed upstream source does not document a
   session-affinity request header. Use the plugin only when a proxy or router
   in front of one or more oMLX servers explicitly consumes your chosen header.
-- **[llama.cpp `llama-server`](https://github.com/ggml-org/llama.cpp/blob/master/tools/server/README.md)**
-  exposes OpenAI-compatible endpoints, parallel slots, prompt-similarity reuse,
-  and a multi-model router. Its current server documentation does not define a
-  custom request header for session-to-slot or backend affinity. A header recipe
-  therefore belongs to an external load balancer or gateway contract, not to
-  `llama-server` itself.
+- **[llama.cpp](https://github.com/ggml-org/llama.cpp)** exposes
+  OpenAI-compatible endpoints through its `llama-server` executable, with
+  parallel slots, prompt-similarity reuse, and a multi-model router. Its current
+  [server documentation](https://github.com/ggml-org/llama.cpp/blob/master/tools/server/README.md)
+  does not define a custom request header for session-to-slot or backend
+  affinity. A header recipe therefore belongs to an external load balancer or
+  gateway contract, not to `llama-server` itself.
 - **[Ollama](https://github.com/ollama/ollama)** exposes OpenAI-compatible chat
   and responses endpoints, documented in its
   [OpenAI compatibility guide](https://docs.ollama.com/api/openai-compatibility).
@@ -326,7 +327,8 @@ publish the GitHub release. Do not tag an unreviewed or untested diff.
   one tested Olla edge and inference-cluster sample.
 - [jundot/omlx](https://github.com/jundot/omlx) — an OpenAI-compatible local
   inference server with an upstream Hermes integration.
-- [ggml-org/llama.cpp server documentation](https://github.com/ggml-org/llama.cpp/blob/master/tools/server/README.md)
+- [ggml-org/llama.cpp](https://github.com/ggml-org/llama.cpp) and its
+  [server documentation](https://github.com/ggml-org/llama.cpp/blob/master/tools/server/README.md)
   — OpenAI-compatible local inference and server/router behavior.
 - [ollama/ollama](https://github.com/ollama/ollama) and its
   [OpenAI compatibility guide](https://docs.ollama.com/api/openai-compatibility)
