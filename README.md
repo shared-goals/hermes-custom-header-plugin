@@ -1,111 +1,155 @@
-# Hermes Agent ↔ Olla Sticky Sessions
+# Hermes Custom Header Plugin
 
-[![CI](https://github.com/shared-goals/hermes-olla-sticky-sessions/actions/workflows/ci.yml/badge.svg)](https://github.com/shared-goals/hermes-olla-sticky-sessions/actions/workflows/ci.yml)
+[![CI](https://github.com/shared-goals/hermes-custom-header-plugin/actions/workflows/ci.yml/badge.svg)](https://github.com/shared-goals/hermes-custom-header-plugin/actions/workflows/ci.yml)
 
-A small [Hermes Agent](https://github.com/NousResearch/hermes-agent) client
-integration that supplies an explicit, privacy-preserving conversation key for
-[Olla](https://github.com/thushan/olla) sticky sessions in custom LLM inference
-stacks.
+A small [Hermes Agent](https://github.com/NousResearch/hermes-agent) middleware
+plugin that adds privacy-preserving, computed request headers to explicitly
+configured custom LLM providers.
 
-Version 0.1.0 is validated with the
-[Thunder Forge](https://github.com/shared-goals/thunder-forge) reference stack
-and [oMLX](https://github.com/jundot/omlx) inference endpoints. Its provider
-selector activates only for canonical `custom:<name>` identities explicitly
-allowed in Hermes configuration. No provider identity is enabled by default.
+The header name and value recipe are configuration, not provider-specific code.
+It can be used with any inference provider or topology whose HTTP endpoint or
+fronting gateway assigns meaning to the configured header.
+[Olla](https://github.com/thushan/olla) sticky sessions through
+[Thunder Forge](https://github.com/shared-goals/thunder-forge) are one tested
+sample, not a hard-coded dependency or required architecture.
 
-The plugin adds `X-Olla-Session-ID` to each eligible main-conversation LLM
-request. Olla can then keep follow-up turns on the same healthy inference
-endpoint, improving the opportunity for prompt/KV-cache reuse without adding a
-second routing layer.
+Version 0.1.0 is deliberately narrow and fail-closed:
 
-## What it does
+- only exact canonical `custom:<name>` provider identities can be configured;
+- no provider is enabled by default, and wildcards and URLs are rejected;
+- every header value is a SHA-256 digest of `session_id` and optional `model`;
+- the header name, input scope, prefix, and digest length are configurable;
+- raw templates, arbitrary Python, environment values, and API keys are not
+  supported;
+- existing caller headers are preserved case-insensitively;
+- authentication and HTTP transport headers are rejected.
 
-For the same Hermes session and effective model alias, the plugin derives:
+## Configuration contract
+
+Each provider has one or more computed header rules:
+
+```yaml
+plugins:
+  entries:
+    hermes-custom-header-plugin:
+      providers:
+        custom:local-inference:
+          headers:
+            X-Conversation-Affinity:
+              strategy: sha256
+              inputs:
+                - session_id
+              prefix: conversation-
+              digest_length: 32
+```
+
+For `inputs: [session_id, model]`, the digest input is
+`session_id + NUL + model`. Input order is significant. `session_id` is required
+in every rule; `model` is optional. `digest_length` must be between 8 and 64.
+The prefix must contain only printable ASCII and can be empty.
+
+Configuration is validated as a whole when Hermes registers the plugin. A
+missing or malformed plugin entry, provider identity, header name, or value rule
+disables all injection. Restart the consuming Hermes process after changing the
+configuration.
+
+The plugin copies `request` and `extra_headers` rather than mutating them. It
+never overwrites a configured header already present under any capitalization.
+It also refuses standard authentication and transport headers including
+`Authorization`, `Cookie`, `Host`, `Content-Length`, and `Connection`.
+
+Static header values belong in Hermes' native `model.extra_headers` or
+`custom_providers[].extra_headers`. This plugin is for values derived from
+request context.
+
+## Tested sample: Olla through Thunder Forge
+
+Olla can use an explicit session key such as `X-Olla-Session-ID`. The following
+configuration was tested with the `custom:thunder-forge` sample provider:
+
+```yaml
+plugins:
+  entries:
+    hermes-custom-header-plugin:
+      providers:
+        custom:thunder-forge:
+          headers:
+            X-Olla-Session-ID:
+              strategy: sha256
+              inputs:
+                - session_id
+                - model
+              prefix: hermes-
+              digest_length: 32
+```
+
+For a given Hermes conversation and effective model alias, this produces:
 
 ```text
 hermes-<first 32 lowercase hex characters of sha256(session_id + NUL + model)>
 ```
 
-It injects that value only when Hermes resolves the request's existing
-`base_url` to a provider identity in the plugin's explicit allow-list.
+Replace `custom:thunder-forge` with the exact identity of your own named custom
+provider when using another Olla deployment. Thunder Forge is simply a public
+example of an edge and inference-cluster setup that preserves the header.
 
-The plugin:
-
-- uses the effective `base_url` already supplied by Hermes;
-- introduces no duplicate endpoint setting such as `THUNDER_FORGE_BASE_URL`;
-- fails closed when configuration is missing or malformed, Hermes cannot
-  identify the provider, or the identity is not explicitly allowed;
-- accepts no wildcard, URL, or implicit all-provider configuration;
-- preserves an explicit `X-Olla-Session-ID` case-insensitively;
-- preserves unrelated `extra_headers`;
-- copies the request and headers instead of mutating the originals;
-- exposes no raw session name, model name, endpoint, API key, or user identity.
-
-A static provider header is not a substitute. One account-wide session value
-would pin unrelated conversations together, reducing both cluster balance and
-useful cache locality.
-
-## Responsibilities
-
-This is client-side integration glue:
+The responsibilities remain separate:
 
 ```text
-Hermes Agent → Thunder Forge edge → Olla → inference endpoints
-     │                               │
-     └─ supplies conversation key    └─ owns pinning, health and repinning
+Hermes Agent -> custom provider edge -> Olla -> inference endpoints
+     |                                  |
+     `- supplies opaque session key     `- owns pinning and repinning
 ```
 
-- Hermes supplies the missing conversation identity.
-- Thunder Forge preserves the caller's header and owns authentication and
-  request attribution.
-- Olla owns endpoint selection, sticky-session state, health checks, retries,
-  and repinning.
-- The inference runtime owns model loading and cache behavior.
+Olla must have sticky sessions enabled with `session_header` among its key
+sources, and every proxy hop must preserve `X-Olla-Session-ID`. Endpoint
+affinity improves the chance of prompt/KV-cache reuse; it does not guarantee a
+cache hit after eviction, restart, TTL expiry, failover, or incompatible prompt
+prefixes.
 
-Endpoint affinity improves the chance of cache reuse; it cannot guarantee a
-cache hit after cold loads, eviction, restarts, TTL expiry, failover, or
-incompatible prompt prefixes.
-
-## Requirements
+## Requirements and compatibility
 
 - Hermes Agent with user plugins and `llm_request` middleware support.
-- At least one named Hermes custom provider with a canonical `custom:<name>`
-  identity explicitly allowed in the plugin configuration.
-- Olla sticky sessions enabled with `session_header` among its key sources.
-- A proxy path, such as Thunder Forge edge, that preserves
-  `X-Olla-Session-ID`.
+- A named custom provider whose resolved `base_url` maps to a canonical
+  `custom:<name>` identity.
+- Any downstream service that understands the configured header.
 
 The plugin was verified against Hermes Agent 0.18.2 and the relevant Hermes
-`main` contracts on 2026-07-15. See [Compatibility](#compatibility) before
-upgrading Hermes.
+`main` contracts on 2026-07-15. It depends on these runtime contracts:
+
+- a plugin exports `register(ctx)` beside `plugin.yaml`;
+- `ctx.register_middleware("llm_request", callback)` registers middleware;
+- the callback receives `request`, `session_id`, `model`, and `base_url`;
+- middleware may return `{"request": updated, "source": ...}`;
+- `hermes_cli.config.load_config()` exposes
+  `plugins.entries.hermes-custom-header-plugin.providers`;
+- `hermes_cli.runtime_provider.find_custom_provider_identity(base_url)` maps
+  the resolved endpoint to a canonical provider identity.
+
+`find_custom_provider_identity` is a Hermes runtime API, not a generic plugin
+context field. Re-check the contract before upgrading Hermes. Independent
+clients that bypass the main `llm_request` middleware are outside scope,
+including model discovery/probes, MoA reference clients, auxiliary inference,
+and provider authentication setup.
+
+This scope matters when triaging Hermes issues:
+
+- static headers should use native `extra_headers`;
+- computed headers on the main conversation request fit this plugin;
+- headers required by every Hermes HTTP path still require an upstream Hermes
+  fix.
 
 ## Install
 
-Review the repository, then install and enable it with Hermes:
+Review the repository, then install and enable it:
 
 ```bash
-hermes plugins install shared-goals/hermes-olla-sticky-sessions --enable
+hermes plugins install shared-goals/hermes-custom-header-plugin --enable
 hermes plugins list
 ```
 
-Merge an explicit provider allow-list into `~/.hermes/config.yaml`. This
-example enables the validated Thunder Forge reference stack:
-
-```yaml
-plugins:
-  entries:
-    hermes-olla-sticky-sessions:
-      provider_identities:
-        - custom:thunder-forge
-```
-
-`provider_identities` must be a non-empty YAML list of canonical
-`custom:<name>` identities. Any missing or malformed value disables header
-injection for the whole plugin. Providers sharing one `base_url` are not
-supported because Hermes' reverse lookup cannot distinguish them reliably.
-
-Hermes loads plugins when the process starts. Start a new CLI session, or
-restart a gateway only after checking its current status:
+Merge explicit provider rules into `~/.hermes/config.yaml`, then start a new
+CLI session or restart a running gateway after checking its state:
 
 ```bash
 hermes gateway status
@@ -113,9 +157,8 @@ hermes gateway restart
 hermes gateway status
 ```
 
-No plugin-specific API key or endpoint variable is required. Keep the
-Thunder Forge credential in the environment variable referenced by the named
-provider entry, for example:
+The plugin needs no secret or endpoint variable. Keep provider credentials in
+the environment variable referenced by the custom-provider entry, for example:
 
 ```yaml
 custom_providers:
@@ -124,94 +167,132 @@ custom_providers:
     key_env: TF_USER_HERMES
     api_mode: chat_completions
     models:
-      agent: {}
-      coder: {}
+      - name: coder-better
+      - name: agent-better
+      - name: memory
 ```
 
-Keep the real key in `~/.hermes/.env`; do not put it in `config.yaml` or this
-repository.
+Keep the real value in `~/.hermes/.env`; do not put it in `config.yaml`, plugin
+configuration, logs, or this repository.
 
-Select the provider explicitly when Thunder Forge is not the default:
+Select a provider explicitly when it is not the default:
 
 ```bash
-hermes --provider custom:thunder-forge -m agent -z 'Reply exactly: ok'
+hermes --provider custom:thunder-forge -m agent-better -z 'Reply exactly: ok'
 ```
 
-Inside an existing Hermes session:
+Inside an existing session:
 
 ```text
-/model custom:thunder-forge:coder
+/model custom:thunder-forge:coder-better
 ```
 
-## Verify routing
+## Verify the Olla recipe
 
-Use a safe test conversation while the selected endpoint remains healthy and
-within Olla's sticky-session idle TTL:
+Use a safe conversation while the selected endpoint remains healthy and within
+Olla's sticky-session idle TTL:
 
-1. Send the first turn and record the redacted sticky key, selected endpoint,
+1. Send the first turn and record only a redacted sticky key, selected endpoint,
    and sticky outcome.
-2. Send a second turn in the same Hermes session and model.
-3. Confirm the key and endpoint remain the same and Olla changes from `miss`
-   to `hit`.
-4. Start a new Hermes session and confirm the key changes.
+2. Send a second turn with the same Hermes session and model.
+3. Confirm the key and endpoint remain stable and Olla changes from `miss` to
+   `hit`.
+4. Start another Hermes session and confirm the key changes.
 5. Switch the effective model alias and confirm the key changes.
 6. Measure inference-cache reuse separately from routing affinity.
 
-Useful evidence includes:
+Useful evidence includes Thunder Forge access JSONL, Olla routing logs,
+`GET /internal/stats/sticky`, and the `X-Olla-Endpoint`,
+`X-Olla-Sticky-Session`, and `X-Olla-Sticky-Key-Source` response headers. Do not
+publish full session keys, provider credentials, or private endpoints.
 
-- Thunder Forge edge access JSONL;
-- Olla routing logs;
-- `GET /internal/stats/sticky`;
-- `X-Olla-Endpoint`, `X-Olla-Sticky-Session`, and
-  `X-Olla-Sticky-Key-Source` response headers.
+## Other local inference setups
+
+The following are compatibility notes and starting points, not verified recipes.
+They were researched from current upstream documentation on 2026-07-15, but
+were not exercised against a live oMLX, llama.cpp, Ollama, or LiteLLM deployment
+for this release. Confirm the exact header name and behavior at your own gateway
+before enabling a rule.
+
+The common configuration shape for a gateway in front of any local runtime is:
+
+```yaml
+plugins:
+  entries:
+    hermes-custom-header-plugin:
+      providers:
+        custom:my-local-inference:
+          headers:
+            X-Session-ID:  # replace with the header your gateway consumes
+              strategy: sha256
+              inputs:
+                - session_id
+                - model
+              prefix: hermes-
+              digest_length: 32
+```
+
+- **[oMLX](https://github.com/jundot/omlx)** has an OpenAI-compatible API and
+  an upstream Hermes integration. Direct single-server oMLX does not need
+  backend affinity, and the reviewed upstream source does not document a
+  session-affinity request header. Use the plugin only when a proxy or router
+  in front of one or more oMLX servers explicitly consumes your chosen header.
+- **[llama.cpp `llama-server`](https://github.com/ggml-org/llama.cpp/blob/master/tools/server/README.md)**
+  exposes OpenAI-compatible endpoints, parallel slots, prompt-similarity reuse,
+  and a multi-model router. Its current server documentation does not define a
+  custom request header for session-to-slot or backend affinity. A header recipe
+  therefore belongs to an external load balancer or gateway contract, not to
+  `llama-server` itself.
+- **[Ollama](https://github.com/ollama/ollama)** exposes OpenAI-compatible chat
+  and responses endpoints, documented in its
+  [OpenAI compatibility guide](https://docs.ollama.com/api/openai-compatibility).
+  The reviewed API docs do not define header-based session affinity; Ollama's
+  `keep_alive` is a request-body option for model residency and is outside this
+  header-only plugin. Use a recipe only if an external Ollama gateway documents
+  the header it consumes.
+- **[LiteLLM](https://github.com/BerriAI/litellm)** provides an
+  OpenAI-compatible proxy and router for many inference providers. Current
+  upstream code can forward client `x-*` headers to backend model calls when
+  `forward_client_headers_to_llm_api` is explicitly enabled, but the reviewed
+  documentation does not define a built-in session-affinity header. Use this
+  plugin to supply a value for a downstream router or custom LiteLLM hook that
+  documents the header; do not assume the stock LiteLLM router will become
+  sticky merely because it receives `X-Session-ID`. Header forwarding is broad,
+  so review which client headers may reach upstream providers before enabling
+  it.
+
+Sending an unknown header directly to a runtime may be harmless, rejected, or
+ignored, but it does not create affinity by itself. The downstream component
+must document and implement the semantics.
 
 ## Update and rollback
 
-Update the source-controlled plugin, then restart the consuming Hermes process:
-
 ```bash
-hermes plugins update hermes-olla-sticky-sessions
+hermes plugins update hermes-custom-header-plugin
 hermes gateway restart
 hermes gateway status
 ```
 
-To roll back the integration completely:
+To remove it completely:
 
 ```bash
-hermes plugins disable hermes-olla-sticky-sessions
-hermes plugins remove hermes-olla-sticky-sessions
+hermes plugins disable hermes-custom-header-plugin
+hermes plugins remove hermes-custom-header-plugin
 hermes gateway restart
 hermes gateway status
 ```
 
-No Thunder Forge, Olla, or inference-runtime rollback is required because this
-plugin changes only the client request headers.
-
-## Compatibility
-
-The current implementation depends on these Hermes runtime contracts:
-
-- user plugins expose `register(ctx)` from a directory containing
-  `plugin.yaml` and `__init__.py`;
-- `ctx.register_middleware("llm_request", callback)` registers request
-  middleware;
-- the callback receives `request`, `session_id`, `model`, and `base_url`;
-- middleware may return `{"request": updated, "source": ...}`;
-- `hermes_cli.config.load_config()` exposes the plugin entry under
-  `plugins.entries.hermes-olla-sticky-sessions.provider_identities`;
-- `hermes_cli.runtime_provider.find_custom_provider_identity(base_url)` maps
-  the resolved endpoint to a canonical `custom:<name>` identity.
-
-`find_custom_provider_identity` is a Hermes runtime API, not a generic plugin
-context field. Re-check this contract before upgrading across Hermes releases.
-Paths that bypass the main `llm_request` middleware, such as independent
-auxiliary clients, are outside this plugin's scope.
+No provider, router, or inference-runtime rollback is required because the
+plugin changes only the main LLM request's headers.
 
 ## Development
 
-Hermes Agent is deliberately not a runtime or test dependency. The pytest
-harness installs a small fake `hermes_cli.runtime_provider` module before
-collection, and each test loads the plugin against an isolated lookup stub.
+Hermes Agent is deliberately not a test dependency. The
+[pytest](https://github.com/pytest-dev/pytest) harness installs small fake
+`hermes_cli` modules and loads the plugin against isolated provider lookup
+stubs. Development dependencies are managed with
+[uv](https://github.com/astral-sh/uv), and linting/format checks use
+[Ruff](https://github.com/astral-sh/ruff).
 
 ```bash
 uv sync --frozen
@@ -223,19 +304,13 @@ git diff --check
 
 ## Versioning
 
-This project follows [Semantic Versioning](https://semver.org/). The version in
-`plugin.yaml` is the plugin version read by Hermes; `pyproject.toml` mirrors it
-for development tooling, and tests require both values to match.
+This project follows [Semantic Versioning](https://semver.org/). Hermes reads
+the version from `plugin.yaml`; `pyproject.toml` mirrors it, and tests require
+both values to match.
 
-For a release:
-
-1. update both version fields;
-2. move the pending entries in `CHANGELOG.md` under the dated version;
-3. run the complete validation commands;
-4. create a reviewed Git tag named `v<version>`;
-5. publish the GitHub release from that tag.
-
-No release tag should be created from an unreviewed or untested diff.
+For a release, update both version fields, move pending changelog entries under
+the dated version, run all validation, create a reviewed `v<version>` tag, and
+publish the GitHub release. Do not tag an unreviewed or untested diff.
 
 ## Related projects and documentation
 
@@ -243,16 +318,26 @@ No release tag should be created from an unreviewed or untested diff.
   the agent and plugin runtime.
 - [Hermes plugin documentation](https://github.com/NousResearch/hermes-agent/blob/main/website/docs/user-guide/features/plugins.md)
   — discovery, installation, enablement, and lifecycle.
-- [thushan/olla](https://github.com/thushan/olla) — the router that owns sticky
-  affinity, endpoint health, and repinning.
+- [thushan/olla](https://github.com/thushan/olla) — the router used by the
+  documented sticky-session recipe.
 - [Olla sticky-session documentation](https://github.com/thushan/olla/blob/main/docs/content/concepts/sticky-sessions.md)
-  — `X-Olla-Session-ID`, key sources, response headers, and observability.
+  — session headers, key sources, and observability.
 - [shared-goals/thunder-forge](https://github.com/shared-goals/thunder-forge) —
-  the validated edge and cluster reference stack whose provider identity is
-  currently enabled.
-- [jundot/omlx](https://github.com/jundot/omlx) — the validated Apple Silicon
-  inference backend in the Thunder Forge reference stack. The plugin itself is
-  client-side and does not depend on a particular Olla backend.
+  one tested Olla edge and inference-cluster sample.
+- [jundot/omlx](https://github.com/jundot/omlx) — an OpenAI-compatible local
+  inference server with an upstream Hermes integration.
+- [ggml-org/llama.cpp server documentation](https://github.com/ggml-org/llama.cpp/blob/master/tools/server/README.md)
+  — OpenAI-compatible local inference and server/router behavior.
+- [ollama/ollama](https://github.com/ollama/ollama) and its
+  [OpenAI compatibility guide](https://docs.ollama.com/api/openai-compatibility)
+  — supported OpenAI-compatible endpoints and fields.
+- [BerriAI/litellm](https://github.com/BerriAI/litellm) and its
+  [official documentation](https://docs.litellm.ai/) — OpenAI-compatible proxy,
+  provider routing, and optional client-header forwarding.
+- [astral-sh/uv](https://github.com/astral-sh/uv),
+  [pytest-dev/pytest](https://github.com/pytest-dev/pytest), and
+  [astral-sh/ruff](https://github.com/astral-sh/ruff) — development validation
+  tools used by this repository.
 - [NousResearch/hermes-example-plugins](https://github.com/NousResearch/hermes-example-plugins)
   — standalone Hermes plugin examples.
 

@@ -1,11 +1,32 @@
 [project]
-name = "hermes-olla-sticky-sessions"
+name = "hermes-custom-header-plugin"
 version = "0.1.0"
-description = "Hermes Agent middleware for conversation-scoped Olla sticky sessions"
+description = "Hermes Agent middleware for computed custom-provider request headers"
 readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"
+keywords = [
+    "hermes-agent",
+    "llm",
+    "middleware",
+    "plugin",
+    "custom-headers",
+    "session-affinity",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Topic :: Internet :: WWW/HTTP",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
 dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/shared-goals/hermes-custom-header-plugin"
+Repository = "https://github.com/shared-goals/hermes-custom-header-plugin.git"
+Issues = "https://github.com/shared-goals/hermes-custom-header-plugin/issues"
 
 [tool.uv]
 package = false

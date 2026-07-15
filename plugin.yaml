@@ -1,4 +1,4 @@
 manifest_version: 1
-name: hermes-olla-sticky-sessions
+name: hermes-custom-header-plugin
 version: "0.1.0"
-description: Add conversation-scoped Olla sticky sessions to explicitly allowed providers
+description: Add computed request headers to explicitly configured custom providers

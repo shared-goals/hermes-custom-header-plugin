@@ -12,7 +12,7 @@ wheels = [
 ]
 
 [[package]]
-name = "hermes-olla-sticky-sessions"
+name = "hermes-custom-header-plugin"
 version = "0.1.0"
 source = { virtual = "." }
 

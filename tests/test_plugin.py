@@ -14,14 +14,43 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 PLUGIN_PATH = ROOT / "__init__.py"
+PLUGIN_NAME = "hermes-custom-header-plugin"
 
 
-def plugin_config(*identities: str) -> dict[str, Any]:
+def header_rule(
+    *,
+    inputs: list[str] | None = None,
+    prefix: str = "hermes-",
+    digest_length: int = 32,
+    strategy: str = "sha256",
+) -> dict[str, Any]:
+    return {
+        "strategy": strategy,
+        "inputs": inputs if inputs is not None else ["session_id", "model"],
+        "prefix": prefix,
+        "digest_length": digest_length,
+    }
+
+
+def plugin_config(
+    providers: dict[str, dict[str, dict[str, Any]]] | None = None,
+) -> dict[str, Any]:
+    configured = (
+        providers
+        if providers is not None
+        else {
+            "custom:thunder-forge": {
+                "headers": {
+                    "X-Olla-Session-ID": header_rule(),
+                }
+            }
+        }
+    )
     return {
         "plugins": {
             "entries": {
-                "hermes-olla-sticky-sessions": {
-                    "provider_identities": list(identities),
+                PLUGIN_NAME: {
+                    "providers": configured,
                 }
             }
         }
@@ -49,17 +78,18 @@ def load_plugin(
     if callable(config_value):
         config.load_config = config_value  # type: ignore[attr-defined]
     else:
-        configured = config_value if config_value is not None else plugin_config("custom:thunder-forge")
+        configured = config_value if config_value is not None else plugin_config()
         config.load_config = lambda: configured  # type: ignore[attr-defined]
 
     monkeypatch.setitem(sys.modules, "hermes_cli", hermes_cli)
     monkeypatch.setitem(sys.modules, "hermes_cli.runtime_provider", runtime_provider)
     monkeypatch.setitem(sys.modules, "hermes_cli.config", config)
 
-    spec = importlib.util.spec_from_file_location("test_hermes_olla_sticky_sessions_plugin", PLUGIN_PATH)
+    spec = importlib.util.spec_from_file_location("test_hermes_custom_header_plugin", PLUGIN_PATH)
     assert spec is not None
     assert spec.loader is not None
     module = importlib.util.module_from_spec(spec)
+    monkeypatch.setitem(sys.modules, spec.name, module)
     spec.loader.exec_module(module)
     return module
 
@@ -75,9 +105,7 @@ def registered_callback(module: ModuleType) -> Callable[..., dict[str, Any] | No
 
 
 def test_registers_exactly_one_llm_request_middleware(monkeypatch: Any) -> None:
-    module = load_plugin(monkeypatch, lambda _: "custom:thunder-forge")
-
-    registered_callback(module)
+    registered_callback(load_plugin(monkeypatch, lambda _: "custom:thunder-forge"))
 
 
 def test_versions_and_manifest_are_consistent(monkeypatch: Any) -> None:
@@ -88,17 +116,17 @@ def test_versions_and_manifest_are_consistent(monkeypatch: Any) -> None:
 
     assert manifest == {
         "manifest_version": 1,
-        "name": "hermes-olla-sticky-sessions",
+        "name": PLUGIN_NAME,
         "version": "0.1.0",
-        "description": "Add conversation-scoped Olla sticky sessions to explicitly allowed providers",
+        "description": "Add computed request headers to explicitly configured custom providers",
     }
     assert manifest["version"] == project["project"]["version"]
+    assert project["project"]["name"] == PLUGIN_NAME
     assert f"## [{manifest['version']}]" in (ROOT / "CHANGELOG.md").read_text()
-    assert "THUNDER_FORGE_BASE_URL" not in manifest_text
     assert "requires_env" not in manifest
 
 
-def test_matching_provider_injects_deterministic_sticky_header(monkeypatch: Any) -> None:
+def test_matching_provider_injects_configured_header_without_mutation(monkeypatch: Any) -> None:
     lookup_calls: list[str] = []
     module = load_plugin(monkeypatch, lambda base_url: lookup_calls.append(base_url) or "custom:thunder-forge")
     callback = registered_callback(module)
@@ -114,167 +142,248 @@ def test_matching_provider_injects_deterministic_sticky_header(monkeypatch: Any)
     )
 
     assert result is not None
-    assert result["source"] == "hermes-olla-sticky-sessions"
-    updated = result["request"]
+    assert result["source"] == PLUGIN_NAME
     expected_digest = hashlib.sha256(b"session-alpha\0agent-better").hexdigest()[:32]
-    assert updated["extra_headers"] == {
+    assert result["request"]["extra_headers"] == {
         "X-Trace-ID": "trace-1",
         "X-Olla-Session-ID": f"hermes-{expected_digest}",
     }
-    assert updated is not request
-    assert updated["extra_headers"] is not original_headers
+    assert result["request"] is not request
+    assert result["request"]["extra_headers"] is not original_headers
     assert request == original_snapshot
     assert lookup_calls == ["http://thunder-forge.example/v1"]
 
 
-def test_non_thunder_forge_provider_leaves_request_unchanged(monkeypatch: Any) -> None:
-    module = load_plugin(monkeypatch, lambda _: "custom:another-provider")
-    callback = registered_callback(module)
+def test_accepts_hermes_managed_allow_tool_override_field(monkeypatch: Any) -> None:
+    config = plugin_config()
+    config["plugins"]["entries"][PLUGIN_NAME]["allow_tool_override"] = False
+    callback = registered_callback(load_plugin(monkeypatch, lambda _: "custom:thunder-forge", config))
+
+    result = callback(request={}, session_id="s1", model="m1", base_url="http://tf/v1")
+
+    assert result is not None
+    assert "X-Olla-Session-ID" in result["request"]["extra_headers"]
+
+
+def test_header_name_and_value_recipe_are_configurable(monkeypatch: Any) -> None:
+    config = plugin_config(
+        {
+            "custom:local-lab": {
+                "headers": {
+                    "X-Local-Affinity": header_rule(
+                        inputs=["session_id"],
+                        prefix="conversation-",
+                        digest_length=16,
+                    )
+                }
+            }
+        }
+    )
+    callback = registered_callback(load_plugin(monkeypatch, lambda _: "custom:local-lab", config))
+
+    result = callback(request={}, session_id="session-alpha", model="agent", base_url="http://lab/v1")
+
+    assert result is not None
+    expected = hashlib.sha256(b"session-alpha").hexdigest()[:16]
+    assert result["request"]["extra_headers"] == {"X-Local-Affinity": f"conversation-{expected}"}
+
+
+def test_multiple_headers_are_supported_for_one_provider(monkeypatch: Any) -> None:
+    config = plugin_config(
+        {
+            "custom:local-lab": {
+                "headers": {
+                    "X-Conversation": header_rule(inputs=["session_id"], prefix="", digest_length=64),
+                    "X-Model-Conversation": header_rule(prefix="hc-", digest_length=12),
+                }
+            }
+        }
+    )
+    callback = registered_callback(load_plugin(monkeypatch, lambda _: "custom:local-lab", config))
+
+    result = callback(request={}, session_id="s1", model="m1", base_url="http://lab/v1")
+
+    assert result is not None
+    assert set(result["request"]["extra_headers"]) == {"X-Conversation", "X-Model-Conversation"}
+
+
+def test_different_explicit_provider_can_have_a_different_recipe(monkeypatch: Any) -> None:
+    config = plugin_config(
+        {
+            "custom:thunder-forge": {"headers": {"X-Olla-Session-ID": header_rule()}},
+            "custom:local-lab": {"headers": {"X-Local-Affinity": header_rule(inputs=["session_id"], prefix="lab-")}},
+        }
+    )
+    callback = registered_callback(load_plugin(monkeypatch, lambda _: "custom:local-lab", config))
+
+    result = callback(request={}, session_id="s1", model="m1", base_url="http://lab/v1")
+
+    assert result is not None
+    assert "X-Local-Affinity" in result["request"]["extra_headers"]
+    assert "X-Olla-Session-ID" not in result["request"]["extra_headers"]
+
+
+def test_unconfigured_provider_leaves_request_unchanged(monkeypatch: Any) -> None:
+    callback = registered_callback(load_plugin(monkeypatch, lambda _: "custom:another-provider"))
     request = {"messages": []}
 
     assert callback(request=request, session_id="session-alpha", model="agent", base_url="http://other/v1") is None
     assert request == {"messages": []}
 
 
-def test_second_explicitly_allowed_provider_injects_header(monkeypatch: Any) -> None:
-    module = load_plugin(
-        monkeypatch,
-        lambda _: "custom:olla-lab",
-        plugin_config("custom:thunder-forge", "custom:olla-lab"),
-    )
-    callback = registered_callback(module)
+def test_missing_or_empty_configuration_fails_closed_without_lookup(monkeypatch: Any) -> None:
+    for config in ({}, plugin_config({})):
+        lookup_calls: list[str] = []
+        callback = registered_callback(
+            load_plugin(monkeypatch, lambda base_url: lookup_calls.append(base_url) or "custom:thunder-forge", config)
+        )
 
-    result = callback(request={}, session_id="session-alpha", model="agent", base_url="http://olla-lab/v1")
-
-    assert result is not None
-    assert "X-Olla-Session-ID" in result["request"]["extra_headers"]
+        assert callback(request={}, session_id="session-alpha", model="agent", base_url="http://tf/v1") is None
+        assert lookup_calls == []
 
 
-def test_missing_provider_configuration_fails_closed_without_lookup(monkeypatch: Any) -> None:
-    lookup_calls: list[str] = []
-    module = load_plugin(
-        monkeypatch,
-        lambda base_url: lookup_calls.append(base_url) or "custom:thunder-forge",
-        {},
-    )
-    callback = registered_callback(module)
+def test_malformed_provider_or_rule_configuration_fails_closed(monkeypatch: Any) -> None:
+    invalid_provider_configs = [
+        {"*": {"headers": {"X-Test": header_rule()}}},
+        {"custom:provider": {"headers": {"Authorization": header_rule()}}},
+        {"custom:provider": {"headers": {"Bad Header": header_rule()}}},
+        {"custom:provider": {"headers": {"X-Test": header_rule(strategy="raw")}}},
+        {"custom:provider": {"headers": {"X-Test": header_rule(inputs=[])}}},
+        {"custom:provider": {"headers": {"X-Test": header_rule(inputs=["model"])}}},
+        {"custom:provider": {"headers": {"X-Test": header_rule(inputs=["session_id", "unknown"])}}},
+        {"custom:provider": {"headers": {"X-Test": header_rule(prefix="bad\nvalue")}}},
+        {"custom:provider": {"headers": {"X-Test": header_rule(digest_length=7)}}},
+        {"custom:provider": {"headers": {"X-Test": header_rule(digest_length=65)}}},
+    ]
+    for providers in invalid_provider_configs:
+        lookup_calls: list[str] = []
+        callback = registered_callback(
+            load_plugin(
+                monkeypatch,
+                lambda base_url: lookup_calls.append(base_url) or "custom:provider",
+                plugin_config(providers),
+            )
+        )
 
-    assert callback(request={}, session_id="session-alpha", model="agent", base_url="http://tf/v1") is None
-    assert lookup_calls == []
+        assert callback(request={}, session_id="session-alpha", model="agent", base_url="http://provider/v1") is None
+        assert lookup_calls == []
 
-
-def test_empty_provider_allow_list_fails_closed_without_lookup(monkeypatch: Any) -> None:
-    lookup_calls: list[str] = []
-    module = load_plugin(
-        monkeypatch,
-        lambda base_url: lookup_calls.append(base_url) or "custom:thunder-forge",
-        plugin_config(),
-    )
-    callback = registered_callback(module)
-
-    assert callback(request={}, session_id="session-alpha", model="agent", base_url="http://tf/v1") is None
-    assert lookup_calls == []
-
-
-def test_malformed_provider_allow_list_fails_closed_without_lookup(monkeypatch: Any) -> None:
-    lookup_calls: list[str] = []
-    config_value = plugin_config("custom:thunder-forge")
-    config_value["plugins"]["entries"]["hermes-olla-sticky-sessions"]["provider_identities"].append("*")
-    module = load_plugin(
-        monkeypatch,
-        lambda base_url: lookup_calls.append(base_url) or "custom:thunder-forge",
-        config_value,
-    )
-    callback = registered_callback(module)
-
-    assert callback(request={}, session_id="session-alpha", model="agent", base_url="http://tf/v1") is None
-    assert lookup_calls == []
+    invalid_entry = plugin_config()
+    invalid_entry["plugins"]["entries"][PLUGIN_NAME]["unexpected"] = True
+    callback = registered_callback(load_plugin(monkeypatch, lambda _: "custom:thunder-forge", invalid_entry))
+    assert callback(request={}, session_id="s1", model="m1", base_url="http://tf/v1") is None
 
 
-def test_provider_config_load_failure_fails_closed_without_lookup(monkeypatch: Any) -> None:
-    lookup_calls: list[str] = []
-
+def test_config_load_or_provider_lookup_failure_fails_closed(monkeypatch: Any) -> None:
     def fail_config_load() -> dict[str, Any]:
         raise RuntimeError("config unavailable")
 
-    module = load_plugin(
-        monkeypatch,
-        lambda base_url: lookup_calls.append(base_url) or "custom:thunder-forge",
-        fail_config_load,
+    config_lookup_calls: list[str] = []
+    callback = registered_callback(
+        load_plugin(
+            monkeypatch,
+            lambda base_url: config_lookup_calls.append(base_url) or "custom:thunder-forge",
+            fail_config_load,
+        )
     )
-    callback = registered_callback(module)
+    assert callback(request={}, session_id="s1", model="m1", base_url="http://tf/v1") is None
+    assert config_lookup_calls == []
 
-    assert callback(request={}, session_id="session-alpha", model="agent", base_url="http://tf/v1") is None
-    assert lookup_calls == []
-
-
-def test_empty_session_leaves_request_unchanged_without_lookup(monkeypatch: Any) -> None:
-    lookup_calls: list[str] = []
-    module = load_plugin(monkeypatch, lambda base_url: lookup_calls.append(base_url) or "custom:thunder-forge")
-    callback = registered_callback(module)
-    request = {"messages": []}
-
-    assert callback(request=request, session_id="", model="agent", base_url="http://thunder-forge/v1") is None
-    assert lookup_calls == []
-    assert request == {"messages": []}
-
-
-def test_provider_lookup_failure_leaves_request_unchanged(monkeypatch: Any) -> None:
     def fail_lookup(_: str) -> str | None:
         raise RuntimeError("provider registry unavailable")
 
-    module = load_plugin(monkeypatch, fail_lookup)
-    callback = registered_callback(module)
-    request = {"messages": [], "extra_headers": {"X-Trace-ID": "trace-1"}}
-
-    assert callback(request=request, session_id="session-alpha", model="agent", base_url="http://tf/v1") is None
-    assert request == {"messages": [], "extra_headers": {"X-Trace-ID": "trace-1"}}
+    callback = registered_callback(load_plugin(monkeypatch, fail_lookup))
+    assert callback(request={}, session_id="s1", model="m1", base_url="http://tf/v1") is None
 
 
-def test_explicit_sticky_header_is_preserved_case_insensitively(monkeypatch: Any) -> None:
-    module = load_plugin(monkeypatch, lambda _: "custom:thunder-forge")
-    callback = registered_callback(module)
-    headers = {"x-OLLA-session-id": "caller-session", "X-Trace-ID": "trace-1"}
-    request = {"messages": [], "extra_headers": headers}
+def test_empty_required_runtime_input_fails_closed(monkeypatch: Any) -> None:
+    lookup_calls: list[str] = []
+    callback = registered_callback(
+        load_plugin(monkeypatch, lambda base_url: lookup_calls.append(base_url) or "custom:thunder-forge")
+    )
 
-    assert callback(request=request, session_id="session-alpha", model="agent", base_url="http://tf/v1") is None
+    assert callback(request={}, session_id="", model="agent", base_url="http://tf/v1") is None
+    assert lookup_calls == []
+    assert callback(request={}, session_id="session-alpha", model="", base_url="http://tf/v1") is None
+
+
+def test_explicit_header_is_preserved_case_insensitively_while_others_are_added(monkeypatch: Any) -> None:
+    config = plugin_config(
+        {
+            "custom:local-lab": {
+                "headers": {
+                    "X-Conversation": header_rule(inputs=["session_id"]),
+                    "X-Model-Conversation": header_rule(),
+                }
+            }
+        }
+    )
+    callback = registered_callback(load_plugin(monkeypatch, lambda _: "custom:local-lab", config))
+    headers = {"x-CONVERSATION": "caller-value", "X-Trace-ID": "trace-1"}
+    request = {"extra_headers": headers}
+
+    result = callback(request=request, session_id="s1", model="m1", base_url="http://lab/v1")
+
+    assert result is not None
+    assert result["request"]["extra_headers"]["x-CONVERSATION"] == "caller-value"
+    assert "X-Model-Conversation" in result["request"]["extra_headers"]
     assert request["extra_headers"] is headers
-    assert request["extra_headers"] == {
-        "x-OLLA-session-id": "caller-session",
-        "X-Trace-ID": "trace-1",
-    }
 
 
-def test_key_scope_and_format(monkeypatch: Any) -> None:
-    module = load_plugin(monkeypatch, lambda _: "custom:thunder-forge")
-    callback = registered_callback(module)
+def test_all_explicit_headers_return_no_change(monkeypatch: Any) -> None:
+    callback = registered_callback(load_plugin(monkeypatch, lambda _: "custom:thunder-forge"))
+    headers = {"x-OLLA-session-id": "caller-session"}
+    request = {"extra_headers": headers}
 
-    def key(session_id: str, model: str) -> str:
+    assert callback(request=request, session_id="s1", model="m1", base_url="http://tf/v1") is None
+    assert request["extra_headers"] is headers
+
+
+def test_invalid_existing_extra_headers_fails_closed(monkeypatch: Any) -> None:
+    callback = registered_callback(load_plugin(monkeypatch, lambda _: "custom:thunder-forge"))
+    request = {"extra_headers": ["invalid"]}
+
+    assert callback(request=request, session_id="s1", model="m1", base_url="http://tf/v1") is None
+    assert request == {"extra_headers": ["invalid"]}
+
+
+def test_value_scope_and_format(monkeypatch: Any) -> None:
+    callback = registered_callback(load_plugin(monkeypatch, lambda _: "custom:thunder-forge"))
+
+    def value(session_id: str, model: str) -> str:
         result = callback(request={}, session_id=session_id, model=model, base_url="http://tf/v1")
         assert result is not None
         return result["request"]["extra_headers"]["X-Olla-Session-ID"]
 
-    first = key("session-alpha", "agent")
-    repeat = key("session-alpha", "agent")
-    new_session = key("session-beta", "agent")
-    new_model = key("session-alpha", "coder")
-
-    assert first == repeat
-    assert first != new_session
-    assert first != new_model
+    first = value("session-alpha", "agent")
+    assert first == value("session-alpha", "agent")
+    assert first != value("session-beta", "agent")
+    assert first != value("session-alpha", "coder")
     assert re.fullmatch(r"hermes-[0-9a-f]{32}", first)
 
 
-def test_key_exposes_no_raw_inputs_or_secret_fixtures(monkeypatch: Any) -> None:
-    module = load_plugin(monkeypatch, lambda _: "custom:thunder-forge")
-    callback = registered_callback(module)
+def test_session_only_recipe_is_stable_across_models(monkeypatch: Any) -> None:
+    config = plugin_config(
+        {"custom:local-lab": {"headers": {"X-Conversation": header_rule(inputs=["session_id"], prefix="session-")}}}
+    )
+    callback = registered_callback(load_plugin(monkeypatch, lambda _: "custom:local-lab", config))
+
+    first = callback(request={}, session_id="s1", model="m1", base_url="http://lab/v1")
+    second = callback(request={}, session_id="s1", model="m2", base_url="http://lab/v1")
+
+    assert first is not None and second is not None
+    assert first["request"]["extra_headers"] == second["request"]["extra_headers"]
+
+
+def test_value_exposes_no_raw_inputs_or_secret_fixtures(monkeypatch: Any) -> None:
+    callback = registered_callback(load_plugin(monkeypatch, lambda _: "custom:thunder-forge"))
     session_id = "private-session-name"
     model = "private-model-alias"
     endpoint = "http://private-endpoint.example/v1"
-    secret = "tf-secret-fixture"
+    secret = "provider-secret-fixture"
 
     result = callback(request={}, session_id=session_id, model=model, base_url=endpoint, api_key=secret)
 
     assert result is not None
-    key = result["request"]["extra_headers"]["X-Olla-Session-ID"]
-    assert all(raw not in key for raw in (session_id, model, endpoint, secret))
+    value = result["request"]["extra_headers"]["X-Olla-Session-ID"]
+    assert all(raw not in value for raw in (session_id, model, endpoint, secret))
