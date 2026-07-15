@@ -21,14 +21,19 @@ Install and enable the plugin:
 hermes plugins install shared-goals/hermes-custom-header-plugin --enable
 ```
 
-Generate a secret containing at least 32 bytes and store it in
-`~/.hermes/.env` as `HERMES_CUSTOM_HEADER_HMAC_KEY`:
+First choose how the routing value should be derived:
 
-```bash
-python -c 'import secrets; print(secrets.token_urlsafe(32))'
-```
+| Strategy | Additional secret | When to use it |
+| --- | --- | --- |
+| `sha256` | Not required | You only need a stable routing key and accept that guessed inputs can be verified against an observed header. |
+| `hmac-sha256` | Required | The header may be observed and you want to prevent offline guessing or reproduction without an installation-local secret. |
 
-Add a named provider and an exact plugin rule to `~/.hermes/config.yaml`:
+Both strategies provide the same sticky-routing behavior. The secret does not
+authenticate with the provider, is never sent to Thunder Forge or Olla, and
+does not by itself improve routing or KV-cache performance.
+
+The simplest setup uses `sha256` and needs no additional secret. Add a named
+provider and an exact plugin rule to `~/.hermes/config.yaml`:
 
 ```yaml
 providers:
@@ -45,7 +50,7 @@ plugins:
         custom:thunder-forge:
           headers:
             X-Olla-Session-ID:
-              strategy: hmac-sha256
+              strategy: sha256
               namespace: installation-a
               inputs:
                 - session_id
@@ -53,6 +58,24 @@ plugins:
               prefix: hermes-
               digest_length: 32
 ```
+
+To protect the generated value from offline input guessing, generate at least
+32 random bytes:
+
+```bash
+python -c 'import secrets; print(secrets.token_urlsafe(32))'
+```
+
+Store the output only on the Hermes installation:
+
+```dotenv
+HERMES_CUSTOM_HEADER_HMAC_KEY=<generated value>
+```
+
+Then change the rule to `strategy: hmac-sha256`. Olla does not need this secret;
+it still receives only the generated routing value. Changing strategy or
+rotating the secret changes all routing keys, so existing conversations will
+produce an initial sticky miss before becoming pinned again.
 
 Restart long-running Hermes processes after configuration changes:
 
@@ -72,12 +95,13 @@ from Hermes' request context and fails closed for that endpoint.
 
 Supported strategies:
 
-- `hmac-sha256` is recommended. It derives an opaque value using
-  `HERMES_CUSTOM_HEADER_HMAC_KEY`, a required non-secret namespace, and the
-  configured runtime inputs. The key is never emitted or logged.
-- `sha256` remains available for legacy routing compatibility. It is an
-  unkeyed deterministic pseudonym, not privacy protection; anyone who can guess
-  the inputs can verify guesses offline.
+- `sha256` derives an unkeyed deterministic pseudonym and requires no secret.
+  It is sufficient for stable routing, but it is not privacy protection: anyone
+  who can guess the inputs can verify guesses against an observed header.
+- `hmac-sha256` derives the same kind of stable routing value using
+  `HERMES_CUSTOM_HEADER_HMAC_KEY` as a key. It prevents verification or
+  reproduction without the installation-local secret. The key is never emitted
+  or logged and is unrelated to provider authentication.
 
 For `namespace: installation-a` and `inputs: [session_id, model]`, the payload
 is `installation-a + NUL + session_id + NUL + model`. Runtime values containing

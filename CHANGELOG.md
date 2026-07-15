@@ -9,6 +9,9 @@ uses [Semantic Versioning](https://semver.org/).
 
 - Restored a visible README overview of Olla, oMLX, llama.cpp, Ollama, and
   LiteLLM compatibility while retaining the detailed compatibility guide.
+- Clarified that `sha256` needs no additional secret, explained what the HMAC
+  secret protects, and separated the optional HMAC setup from the basic quick
+  start.
 
 ## [0.3.0] - 2026-07-15
 
