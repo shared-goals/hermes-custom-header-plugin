@@ -5,6 +5,13 @@ uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-07-15
+
+### Changed
+
+- Removed the upper Python version bound. The plugin now declares Python 3.11
+  or newer and can follow current Hermes installations onto newer runtimes.
+
 ## [0.4.0] - 2026-07-15
 
 ### Changed
@@ -75,7 +82,8 @@ uses [Semantic Versioning](https://semver.org/).
 - Isolated contract tests with no Hermes Agent package dependency.
 - Installation, verification, compatibility, rollback, and release guidance.
 
-[Unreleased]: https://github.com/shared-goals/hermes-custom-header-plugin/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/shared-goals/hermes-custom-header-plugin/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/shared-goals/hermes-custom-header-plugin/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/shared-goals/hermes-custom-header-plugin/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/shared-goals/hermes-custom-header-plugin/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/shared-goals/hermes-custom-header-plugin/compare/v0.1.0...v0.2.0

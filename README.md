@@ -172,7 +172,8 @@ See [docs/compatibility.md](docs/compatibility.md) for details.
 - Hermes Agent 0.18.2 or newer with user plugins and `llm_request` middleware.
 - A named custom provider whose resolved URL maps to one canonical identity.
 - A downstream component that implements the configured header.
-- Python 3.11-3.14, matching tested Hermes Agent 0.18.2 installations.
+- Python 3.11 or newer. The plugin does not impose an upper Python version
+  bound.
 
 CI runs the real discovery and middleware smoke test against Hermes Agent 0.18.2.
 A scheduled canary repeats it against Hermes `main`.

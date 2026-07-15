@@ -104,7 +104,7 @@ def test_versions_and_manifest_are_consistent(monkeypatch: Any) -> None:
     assert manifest == {
         "manifest_version": 1,
         "name": PLUGIN_NAME,
-        "version": "0.4.0",
+        "version": "0.4.1",
         "description": "Add session-and-model request headers to explicitly configured custom providers",
     }
     assert manifest["version"] == project["project"]["version"]
