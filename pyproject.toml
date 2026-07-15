@@ -1,9 +1,9 @@
 [project]
 name = "hermes-custom-header-plugin"
-version = "0.2.0"
+version = "0.3.0"
 description = "Hermes Agent middleware for computed custom-provider request headers"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.11,<3.14"
 license = "MIT"
 keywords = [
     "hermes-agent",
@@ -33,6 +33,7 @@ package = false
 
 [dependency-groups]
 dev = [
+    "coverage>=7.6",
     "pytest>=8.0",
     "pyyaml>=6.0",
     "ruff>=0.15",
@@ -40,6 +41,9 @@ dev = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+    "integration: requires an installed Hermes Agent runtime",
+]
 
 [tool.ruff]
 target-version = "py311"

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
 import importlib.util
+import os
 import re
 import sys
 import tomllib
@@ -36,6 +38,10 @@ def header_rule(
 
 def plugin_config(
     providers: dict[str, dict[str, dict[str, Any]]] | None = None,
+    *,
+    runtime_providers: dict[str, dict[str, Any]] | None = None,
+    legacy_runtime_providers: list[dict[str, Any]] | None = None,
+    entry_metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     configured = (
         providers
@@ -48,15 +54,21 @@ def plugin_config(
             }
         }
     )
-    return {
+    entry: dict[str, Any] = {"providers": configured}
+    if entry_metadata:
+        entry.update(entry_metadata)
+    config: dict[str, Any] = {
         "plugins": {
             "entries": {
-                PLUGIN_NAME: {
-                    "providers": configured,
-                }
+                PLUGIN_NAME: entry,
             }
         }
     }
+    if runtime_providers is not None:
+        config["providers"] = runtime_providers
+    if legacy_runtime_providers is not None:
+        config["custom_providers"] = legacy_runtime_providers
+    return config
 
 
 class FakePluginContext:
@@ -82,6 +94,7 @@ def load_plugin(
     else:
         configured = config_value if config_value is not None else plugin_config()
         config.load_config = lambda: configured  # type: ignore[attr-defined]
+    config.get_env_value = lambda key: os.environ.get(key)  # type: ignore[attr-defined]
 
     monkeypatch.setitem(sys.modules, "hermes_cli", hermes_cli)
     monkeypatch.setitem(sys.modules, "hermes_cli.runtime_provider", runtime_provider)
@@ -119,7 +132,7 @@ def test_versions_and_manifest_are_consistent(monkeypatch: Any) -> None:
     assert manifest == {
         "manifest_version": 1,
         "name": PLUGIN_NAME,
-        "version": "0.2.0",
+        "version": "0.3.0",
         "description": "Add computed request headers to explicitly configured custom providers",
     }
     assert manifest["version"] == project["project"]["version"]
@@ -156,9 +169,8 @@ def test_matching_provider_injects_configured_header_without_mutation(monkeypatc
     assert lookup_calls == ["http://thunder-forge.example/v1"]
 
 
-def test_accepts_hermes_managed_allow_tool_override_field(monkeypatch: Any) -> None:
-    config = plugin_config()
-    config["plugins"]["entries"][PLUGIN_NAME]["allow_tool_override"] = False
+def test_accepts_hermes_managed_plugin_entry_fields(monkeypatch: Any) -> None:
+    config = plugin_config(entry_metadata={"allow_tool_override": False, "llm": {"enabled": False}, "future": True})
     callback = registered_callback(load_plugin(monkeypatch, lambda _: "custom:thunder-forge", config))
 
     result = callback(request={}, session_id="s1", model="m1", base_url="http://tf/v1")
@@ -190,13 +202,68 @@ def test_header_name_and_value_recipe_are_configurable(monkeypatch: Any) -> None
     assert result["request"]["extra_headers"] == {"X-Local-Affinity": f"conversation-{expected}"}
 
 
+def test_hmac_sha256_uses_an_installation_secret(monkeypatch: Any) -> None:
+    secret = "0123456789abcdef0123456789abcdef"
+    monkeypatch.setenv("HERMES_CUSTOM_HEADER_HMAC_KEY", secret)
+    config = plugin_config(
+        {
+            "custom:local-lab": {
+                "headers": {
+                    "X-Local-Affinity": header_rule(strategy="hmac-sha256"),
+                }
+            }
+        }
+    )
+    callback = registered_callback(load_plugin(monkeypatch, lambda _: "custom:local-lab", config))
+
+    result = callback(request={}, session_id="session-alpha", model="agent", base_url="http://lab/v1")
+
+    assert result is not None
+    expected = hmac.new(
+        secret.encode(),
+        b"installation-a\0session-alpha\0agent",
+        hashlib.sha256,
+    ).hexdigest()[:32]
+    value = result["request"]["extra_headers"]["X-Local-Affinity"]
+    assert value == f"hermes-{expected}"
+    assert secret not in value
+
+
+def test_hmac_secret_is_required_and_never_logged(monkeypatch: Any, caplog: Any) -> None:
+    config = plugin_config(
+        {
+            "custom:local-lab": {
+                "headers": {
+                    "X-Local-Affinity": header_rule(strategy="hmac-sha256"),
+                }
+            }
+        }
+    )
+    for secret in (None, "short-secret"):
+        caplog.clear()
+        if secret is None:
+            monkeypatch.delenv("HERMES_CUSTOM_HEADER_HMAC_KEY", raising=False)
+        else:
+            monkeypatch.setenv("HERMES_CUSTOM_HEADER_HMAC_KEY", secret)
+        lookup_calls: list[str] = []
+        callback = registered_callback(
+            load_plugin(monkeypatch, lambda base_url: lookup_calls.append(base_url) or "custom:local-lab", config)
+        )
+
+        assert callback(request={}, session_id="s1", model="m1", base_url="http://lab/v1") is None
+        assert lookup_calls == []
+        assert "must contain at least 32 UTF-8 bytes" in caplog.text
+        if secret:
+            assert secret not in caplog.text
+
+
 def test_multiple_headers_are_supported_for_one_provider(monkeypatch: Any) -> None:
     config = plugin_config(
         {
             "custom:local-lab": {
                 "headers": {
                     "X-Conversation": header_rule(inputs=["session_id"], prefix="", digest_length=64),
-                    "X-Model-Conversation": header_rule(prefix="hc-", digest_length=12),
+                    "X-Model-Conversation": header_rule(prefix="hc-", digest_length=16),
                 }
             }
         }
@@ -233,6 +300,39 @@ def test_unconfigured_provider_leaves_request_unchanged(monkeypatch: Any) -> Non
     assert request == {"messages": []}
 
 
+def test_shared_provider_base_url_fails_closed_before_lookup(monkeypatch: Any, caplog: Any) -> None:
+    shared_url = "http://shared.example/v1"
+    config = plugin_config(
+        runtime_providers={
+            "first": {"api": shared_url},
+            "second": {"api": f"{shared_url}/"},
+        }
+    )
+    lookup_calls: list[str] = []
+    callback = registered_callback(
+        load_plugin(monkeypatch, lambda base_url: lookup_calls.append(base_url) or "custom:first", config)
+    )
+
+    assert callback(request={}, session_id="s1", model="m1", base_url=shared_url) is None
+    assert lookup_calls == []
+    assert "shared custom-provider base URL" in caplog.text
+    assert shared_url not in caplog.text
+
+
+def test_current_and_legacy_entries_for_same_provider_are_not_ambiguous(monkeypatch: Any) -> None:
+    shared_url = "http://shared.example/v1"
+    config = plugin_config(
+        runtime_providers={"thunder-forge": {"api": shared_url}},
+        legacy_runtime_providers=[{"name": "thunder-forge", "base_url": shared_url}],
+    )
+    callback = registered_callback(load_plugin(monkeypatch, lambda _: "custom:thunder-forge", config))
+
+    result = callback(request={}, session_id="s1", model="m1", base_url=shared_url)
+
+    assert result is not None
+    assert "X-Olla-Session-ID" in result["request"]["extra_headers"]
+
+
 def test_missing_or_empty_configuration_fails_closed_without_lookup(monkeypatch: Any) -> None:
     for config in ({}, plugin_config({})):
         lookup_calls: list[str] = []
@@ -250,6 +350,8 @@ def test_malformed_provider_or_rule_configuration_fails_closed(monkeypatch: Any)
     invalid_provider_configs = [
         {"*": {"headers": {"X-Test": header_rule()}}},
         {"custom:provider": {"headers": {"Authorization": header_rule()}}},
+        {"custom:provider": {"headers": {"Keep-Alive": header_rule()}}},
+        {"custom:provider": {"headers": {"Proxy-Connection": header_rule()}}},
         {"custom:provider": {"headers": {"Bad Header": header_rule()}}},
         {"custom:provider": {"headers": {"X-Test": header_rule(strategy="raw")}}},
         {"custom:provider": {"headers": {"X-Test": missing_namespace}}},
@@ -260,8 +362,11 @@ def test_malformed_provider_or_rule_configuration_fails_closed(monkeypatch: Any)
         {"custom:provider": {"headers": {"X-Test": header_rule(inputs=["model"])}}},
         {"custom:provider": {"headers": {"X-Test": header_rule(inputs=["session_id", "unknown"])}}},
         {"custom:provider": {"headers": {"X-Test": header_rule(prefix="bad\nvalue")}}},
-        {"custom:provider": {"headers": {"X-Test": header_rule(digest_length=7)}}},
+        {"custom:provider": {"headers": {"X-Test": header_rule(prefix=" leading")}}},
+        {"custom:provider": {"headers": {"X-Test": header_rule(prefix="a" * 129)}}},
+        {"custom:provider": {"headers": {"X-Test": header_rule(digest_length=15)}}},
         {"custom:provider": {"headers": {"X-Test": header_rule(digest_length=65)}}},
+        {"custom:provider": {"headers": {"X-Test": header_rule(digest_length=True)}}},
     ]
     for providers in invalid_provider_configs:
         lookup_calls: list[str] = []
@@ -276,15 +381,10 @@ def test_malformed_provider_or_rule_configuration_fails_closed(monkeypatch: Any)
         assert callback(request={}, session_id="session-alpha", model="agent", base_url="http://provider/v1") is None
         assert lookup_calls == []
 
-    invalid_entry = plugin_config()
-    invalid_entry["plugins"]["entries"][PLUGIN_NAME]["unexpected"] = True
-    callback = registered_callback(load_plugin(monkeypatch, lambda _: "custom:thunder-forge", invalid_entry))
-    assert callback(request={}, session_id="s1", model="m1", base_url="http://tf/v1") is None
 
-
-def test_config_load_or_provider_lookup_failure_fails_closed(monkeypatch: Any) -> None:
+def test_config_load_or_provider_lookup_failure_fails_closed(monkeypatch: Any, caplog: Any) -> None:
     def fail_config_load() -> dict[str, Any]:
-        raise RuntimeError("config unavailable")
+        raise RuntimeError("private-endpoint.example provider-secret-fixture")
 
     config_lookup_calls: list[str] = []
     callback = registered_callback(
@@ -296,6 +396,9 @@ def test_config_load_or_provider_lookup_failure_fails_closed(monkeypatch: Any) -
     )
     assert callback(request={}, session_id="s1", model="m1", base_url="http://tf/v1") is None
     assert config_lookup_calls == []
+    assert "Hermes configuration could not be loaded" in caplog.text
+    assert "private-endpoint.example" not in caplog.text
+    assert "provider-secret-fixture" not in caplog.text
 
     def fail_lookup(_: str) -> str | None:
         raise RuntimeError("provider registry unavailable")
@@ -313,6 +416,7 @@ def test_empty_required_runtime_input_fails_closed(monkeypatch: Any) -> None:
     assert callback(request={}, session_id="", model="agent", base_url="http://tf/v1") is None
     assert lookup_calls == []
     assert callback(request={}, session_id="session-alpha", model="", base_url="http://tf/v1") is None
+    assert callback(request={}, session_id="session\0alpha", model="agent", base_url="http://tf/v1") is None
 
 
 def test_explicit_header_is_preserved_case_insensitively_while_others_are_added(monkeypatch: Any) -> None:

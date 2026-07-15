@@ -11,6 +11,7 @@ runtime_provider = ModuleType("hermes_cli.runtime_provider")
 runtime_provider.find_custom_provider_identity = lambda _: None  # type: ignore[attr-defined]
 config = ModuleType("hermes_cli.config")
 config.load_config = lambda: {}  # type: ignore[attr-defined]
+config.get_env_value = lambda _: None  # type: ignore[attr-defined]
 
 sys.modules.setdefault("hermes_cli", hermes_cli)
 sys.modules.setdefault("hermes_cli.runtime_provider", runtime_provider)

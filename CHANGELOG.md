@@ -5,6 +5,28 @@ uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-07-15
+
+### Added
+
+- Added keyed `hmac-sha256` header derivation using the installation-scoped
+  `HERMES_CUSTOM_HEADER_HMAC_KEY` secret.
+- Added redacted configuration diagnostics, duplicate-provider-URL detection,
+  real Hermes Agent 0.18.2 integration coverage, and a weekly Hermes `main`
+  compatibility canary.
+- Added dependency update automation, immutable workflow action pins, an
+  installation guide, runtime compatibility notes, and a security policy.
+
+### Changed
+
+- Raised the minimum digest length from 8 to 16 hexadecimal characters.
+- Reject prefixes beginning with whitespace and runtime inputs containing NUL
+  so every generated header has an unambiguous, valid wire representation.
+- Ignore unrelated Hermes-managed plugin entry fields while keeping the
+  plugin-owned provider and rule schema strict.
+- Document SHA-256 values as deterministic pseudonyms and recommend HMAC for
+  protection against offline input guessing.
+
 ## [0.2.0] - 2026-07-15
 
 ### Added
@@ -31,6 +53,7 @@ uses [Semantic Versioning](https://semver.org/).
 - Isolated contract tests with no Hermes Agent package dependency.
 - Installation, verification, compatibility, rollback, and release guidance.
 
-[Unreleased]: https://github.com/shared-goals/hermes-custom-header-plugin/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/shared-goals/hermes-custom-header-plugin/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/shared-goals/hermes-custom-header-plugin/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/shared-goals/hermes-custom-header-plugin/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/shared-goals/hermes-custom-header-plugin/releases/tag/v0.1.0

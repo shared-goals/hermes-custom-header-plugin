@@ -1,0 +1,42 @@
+name: Hermes Main Canary
+
+on:
+  schedule:
+    - cron: "17 4 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: hermes-main-canary
+  cancel-in-progress: true
+
+jobs:
+  compatibility:
+    name: Hermes Agent main
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.13"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+        with:
+          enable-cache: true
+
+      - name: Install development dependencies
+        run: uv sync --frozen
+
+      - name: Install Hermes main
+        run: uv pip install "hermes-agent @ git+https://github.com/NousResearch/hermes-agent.git@main"
+
+      - name: Run real Hermes integration test
+        run: uv run pytest tests/test_hermes_integration.py -m integration --tb=short -q
