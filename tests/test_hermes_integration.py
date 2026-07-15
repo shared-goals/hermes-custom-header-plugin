@@ -31,11 +31,16 @@ def test_real_hermes_plugin_discovery_and_middleware(tmp_path: Path) -> None:
 
     (hermes_home / "config.yaml").write_text(
         """\
-providers:
-  thunder-forge:
-    api: http://gateway.example:40116/v1
+custom_providers:
+  - name: thunder-forge
+    base_url: http://gateway.example:40116/v1
     key_env: TF_USER_HERMES
-    transport: chat_completions
+    api_mode: chat_completions
+    models:
+      - name: agent-better
+        model: agent-better
+      - name: coder-better
+        model: coder-better
 plugins:
   enabled:
     - hermes-custom-header-plugin
@@ -44,18 +49,8 @@ plugins:
     hermes-custom-header-plugin:
       providers:
         custom:thunder-forge:
-          headers:
-            X-Olla-Session-ID:
-              strategy: hmac-sha256
-              namespace: integration
-              inputs: [session_id, model]
-              prefix: hermes-
-              digest_length: 32
+          header: X-Olla-Session-ID
 """,
-        encoding="utf-8",
-    )
-    (hermes_home / ".env").write_text(
-        "HERMES_CUSTOM_HEADER_HMAC_KEY=0123456789abcdef0123456789abcdef\n",
         encoding="utf-8",
     )
 
@@ -79,8 +74,7 @@ result = apply_llm_request_middleware(
 assert result.changed is True
 assert result.trace[-1]["source"] == "hermes-custom-header-plugin"
 value = result.payload["extra_headers"]["X-Olla-Session-ID"]
-assert value.startswith("hermes-")
-assert len(value) == len("hermes-") + 32
+assert value == "20260715_165700_abcdef:agent-better"
 """
     env = os.environ.copy()
     env.update(
@@ -88,7 +82,6 @@ assert len(value) == len("hermes-") + 32
             "HERMES_HOME": str(hermes_home),
         }
     )
-    env.pop("HERMES_CUSTOM_HEADER_HMAC_KEY", None)
     env.pop("HERMES_SAFE_MODE", None)
     completed = subprocess.run(
         [sys.executable, "-c", script],

@@ -19,20 +19,12 @@ plugins:
     hermes-custom-header-plugin:
       providers:
         custom:my-local-inference:
-          headers:
-            X-Session-ID:
-              strategy: hmac-sha256
-              namespace: local-instance-a
-              inputs:
-                - session_id
-                - model
-              prefix: hermes-
-              digest_length: 32
+          header: X-Session-ID
 ```
 
-The provider must have a unique normalized URL in Hermes configuration. Store a
-unique `HERMES_CUSTOM_HEADER_HMAC_KEY` for this installation in
-`~/.hermes/.env`.
+The provider must have a unique normalized URL in Hermes configuration. The
+plugin sends `<session_id>:<model>`. Models remain configured on the Hermes
+provider, not in the plugin entry.
 
 ## Olla
 
@@ -40,7 +32,7 @@ unique `HERMES_CUSTOM_HEADER_HMAC_KEY` for this installation in
 an explicit session header such as `X-Olla-Session-ID`. Configure
 `session_header` among its key sources and verify that every proxy preserves the
 header. Olla owns backend selection, repinning, TTL, and observability; this
-plugin only provides the stable opaque key.
+plugin only provides the stable session-and-model key.
 
 ## oMLX
 
@@ -78,5 +70,4 @@ that defines the semantics. Review the full forwarded-header surface before
 enabling broad client-header forwarding.
 
 Unknown headers may be ignored or rejected. Always test the complete path and
-keep raw session keys, provider credentials, endpoints, and HMAC secrets out of
-published evidence.
+keep provider credentials and private endpoints out of published evidence.

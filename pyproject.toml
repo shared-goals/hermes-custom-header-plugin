@@ -1,9 +1,9 @@
 [project]
 name = "hermes-custom-header-plugin"
-version = "0.3.0"
-description = "Hermes Agent middleware for computed custom-provider request headers"
+version = "0.4.0"
+description = "Hermes Agent middleware for session-and-model custom-provider request headers"
 readme = "README.md"
-requires-python = ">=3.11,<3.14"
+requires-python = ">=3.11,<3.15"
 license = "MIT"
 keywords = [
     "hermes-agent",
@@ -18,6 +18,10 @@ classifiers = [
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Topic :: Internet :: WWW/HTTP",
     "Topic :: Software Development :: Libraries :: Python Modules",
 ]

@@ -5,13 +5,27 @@ uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-### Documentation
+## [0.4.0] - 2026-07-15
 
-- Restored a visible README overview of Olla, oMLX, llama.cpp, Ollama, and
-  LiteLLM compatibility while retaining the detailed compatibility guide.
-- Clarified that `sha256` needs no additional secret, explained what the HMAC
-  secret protects, and separated the optional HMAC setup from the basic quick
-  start.
+### Changed
+
+- Replaced configurable hash recipes with one transparent header value:
+  `<session_id>:<model>`.
+- Simplified each provider rule to one required `header` field while preserving
+  exact provider lookup, duplicate-URL fail-closed behavior, caller-header
+  precedence, and immutable request updates.
+- Updated the quick start around the existing Hermes `custom_providers` model
+  configuration used by Chez: `agent-better` by default and `coder-better` for
+  coding work.
+- Extended declared and tested compatibility through Python 3.14, matching the
+  live Chez Hermes Agent runtime.
+
+### Removed
+
+- Removed namespace, prefix, input-list, digest-length, SHA-256, and HMAC
+  configuration.
+- Removed `HERMES_CUSTOM_HEADER_HMAC_KEY`; version 0.4.0 has no plugin-specific
+  secret.
 
 ## [0.3.0] - 2026-07-15
 
@@ -61,7 +75,8 @@ uses [Semantic Versioning](https://semver.org/).
 - Isolated contract tests with no Hermes Agent package dependency.
 - Installation, verification, compatibility, rollback, and release guidance.
 
-[Unreleased]: https://github.com/shared-goals/hermes-custom-header-plugin/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/shared-goals/hermes-custom-header-plugin/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/shared-goals/hermes-custom-header-plugin/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/shared-goals/hermes-custom-header-plugin/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/shared-goals/hermes-custom-header-plugin/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/shared-goals/hermes-custom-header-plugin/releases/tag/v0.1.0
