@@ -141,6 +141,33 @@ the `X-Olla-Endpoint`, `X-Olla-Sticky-Session`, and
 `X-Olla-Sticky-Key-Source` response headers. Never publish full session keys,
 provider credentials, private endpoints, or the HMAC key.
 
+## Inference engines and gateways
+
+The plugin is engine-agnostic: it adds a computed request header, while the
+receiving gateway or router defines what that header means. Relevant setups
+include:
+
+- **[Olla](https://github.com/thushan/olla)** — the tested sticky-session
+  gateway recipe. Olla consumes the session header and owns backend affinity,
+  repinning, TTL, and routing observability.
+- **[oMLX](https://github.com/jundot/omlx)** — an OpenAI-compatible inference
+  server. A direct single-server deployment does not need affinity; use the
+  plugin when an external router in front of multiple oMLX servers consumes the
+  header.
+- **[llama.cpp](https://github.com/ggml-org/llama.cpp)** — provides
+  OpenAI-compatible endpoints, parallel slots, prompt reuse, and a multi-model
+  router, but does not define a native header for session affinity. Put that
+  contract in an external gateway.
+- **[Ollama](https://github.com/ollama/ollama)** — provides OpenAI-compatible
+  endpoints but no documented header-based affinity. Its `keep_alive` request
+  option controls model residency, not request routing.
+- **[LiteLLM](https://github.com/BerriAI/litellm)** — can forward client `x-*`
+  headers, but a forwarded session header is not automatically sticky. Pair it
+  with a router or hook that explicitly implements the header semantics.
+
+See [docs/compatibility.md](docs/compatibility.md) for the detailed limitations,
+configuration guidance, and upstream references for each setup.
+
 ## Requirements and compatibility
 
 - Hermes Agent 0.18.2 or newer with user plugins and `llm_request` middleware.
@@ -158,9 +185,6 @@ before upgrading a production Hermes installation.
 Middleware only covers the main conversation request path. Model discovery,
 probes, MoA reference clients, auxiliary inference, and provider authentication
 that bypass `llm_request` remain outside scope.
-
-See [docs/compatibility.md](docs/compatibility.md) for oMLX, llama.cpp, Ollama,
-LiteLLM, and gateway-specific guidance.
 
 ## Update and rollback
 

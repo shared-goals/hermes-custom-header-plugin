@@ -5,6 +5,11 @@ uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Documentation
+
+- Restored a visible README overview of Olla, oMLX, llama.cpp, Ollama, and
+  LiteLLM compatibility while retaining the detailed compatibility guide.
+
 ## [0.3.0] - 2026-07-15
 
 ### Added
