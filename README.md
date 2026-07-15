@@ -3,6 +3,8 @@
 [![CI](https://github.com/shared-goals/hermes-custom-header-plugin/actions/workflows/ci.yml/badge.svg)](https://github.com/shared-goals/hermes-custom-header-plugin/actions/workflows/ci.yml)
 [![Hermes main canary](https://github.com/shared-goals/hermes-custom-header-plugin/actions/workflows/hermes-canary.yml/badge.svg)](https://github.com/shared-goals/hermes-custom-header-plugin/actions/workflows/hermes-canary.yml)
 
+## About
+
 A small [Hermes Agent](https://github.com/NousResearch/hermes-agent) middleware
 plugin that adds deterministic, pseudonymous request headers to explicitly
 configured custom LLM providers.
@@ -15,25 +17,17 @@ tested recipe, not a hard-coded dependency.
 
 ## Quick start
 
-Install and enable the plugin:
+The basic setup uses `sha256` and does **not** need an additional secret.
+
+### 1. Install the plugin
 
 ```bash
 hermes plugins install shared-goals/hermes-custom-header-plugin --enable
 ```
 
-First choose how the routing value should be derived:
+### 2. Configure a provider and header
 
-| Strategy | Additional secret | When to use it |
-| --- | --- | --- |
-| `sha256` | Not required | You only need a stable routing key and accept that guessed inputs can be verified against an observed header. |
-| `hmac-sha256` | Required | The header may be observed and you want to prevent offline guessing or reproduction without an installation-local secret. |
-
-Both strategies provide the same sticky-routing behavior. The secret does not
-authenticate with the provider, is never sent to Thunder Forge or Olla, and
-does not by itself improve routing or KV-cache performance.
-
-The simplest setup uses `sha256` and needs no additional secret. Add a named
-provider and an exact plugin rule to `~/.hermes/config.yaml`:
+Add a named provider and an exact plugin rule to `~/.hermes/config.yaml`:
 
 ```yaml
 providers:
@@ -59,14 +53,51 @@ plugins:
               digest_length: 32
 ```
 
-To protect the generated value from offline input guessing, generate at least
-32 random bytes:
+Replace the example URL, provider credential name, model alias, and namespace
+with your own values. `TF_USER_HERMES` is the upstream provider's API
+credential; it belongs in `~/.hermes/.env` and is unrelated to the plugin's
+optional HMAC secret.
+
+The rule key must remain the canonical `custom:<provider-name>` identity. For
+the provider named `thunder-forge`, that identity is
+`custom:thunder-forge`. `X-Olla-Session-ID` is the header name; the nested
+fields define how its value is generated.
+
+### 3. Restart Hermes
+
+Restart long-running Hermes processes so they load the plugin and configuration:
+
+```bash
+hermes gateway restart
+hermes gateway status
+```
+
+The plugin now generates a stable header for each Hermes session and model.
+The receiving gateway must explicitly support that header; unknown headers may
+simply be ignored.
+
+## Optional HMAC protection
+
+Use the more complex `hmac-sha256` variant only when the generated header may
+be observed and you want to prevent offline guessing or reproduction without
+an installation-local secret.
+
+| Strategy | Additional secret | When to use it |
+| --- | --- | --- |
+| `sha256` | Not required | You only need a stable routing key and accept that guessed inputs can be verified against an observed header. |
+| `hmac-sha256` | Required | You also need to prevent reproduction of the value without a local secret. |
+
+Both strategies provide the same sticky-routing behavior. The HMAC secret does
+not authenticate with the provider, is never sent to Thunder Forge or Olla,
+and does not by itself improve routing or KV-cache performance.
+
+Generate at least 32 random bytes:
 
 ```bash
 python -c 'import secrets; print(secrets.token_urlsafe(32))'
 ```
 
-Store the output only on the Hermes installation:
+Store the output only on the Hermes installation in `~/.hermes/.env`:
 
 ```dotenv
 HERMES_CUSTOM_HEADER_HMAC_KEY=<generated value>
@@ -77,10 +108,9 @@ it still receives only the generated routing value. Changing strategy or
 rotating the secret changes all routing keys, so existing conversations will
 produce an initial sticky miss before becoming pinned again.
 
-Restart long-running Hermes processes after configuration changes:
+Restart Hermes after changing the strategy or secret:
 
 ```bash
-hermes gateway status
 hermes gateway restart
 hermes gateway status
 ```
