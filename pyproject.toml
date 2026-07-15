@@ -1,6 +1,6 @@
 [project]
 name = "hermes-custom-header-plugin"
-version = "0.1.0"
+version = "0.2.0"
 description = "Hermes Agent middleware for computed custom-provider request headers"
 readme = "README.md"
 requires-python = ">=3.11"

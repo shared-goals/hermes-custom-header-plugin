@@ -1,4 +1,4 @@
 manifest_version: 1
 name: hermes-custom-header-plugin
-version: "0.1.0"
+version: "0.2.0"
 description: Add computed request headers to explicitly configured custom providers

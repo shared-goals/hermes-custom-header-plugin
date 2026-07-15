@@ -14,6 +14,7 @@ PLUGIN_NAME = "hermes-custom-header-plugin"
 CONFIG_KEY = "providers"
 IDENTITY_PATTERN = re.compile(r"custom:[a-z0-9][a-z0-9._-]*")
 HEADER_PATTERN = re.compile(r"[!#$%&'*+.^_`|~0-9A-Za-z-]+")
+NAMESPACE_PATTERN = re.compile(r"[0-9A-Za-z][0-9A-Za-z._-]{0,63}")
 ALLOWED_INPUTS = frozenset({"session_id", "model"})
 BLOCKED_HEADERS = frozenset(
     {
@@ -42,6 +43,7 @@ class HeaderRule:
     """Validated rule for one computed request header."""
 
     name: str
+    namespace: str
     inputs: tuple[str, ...]
     prefix: str
     digest_length: int
@@ -54,12 +56,17 @@ def _parse_rule(name: Any, raw_rule: Any) -> HeaderRule | None:
         return None
     if not isinstance(raw_rule, dict) or set(raw_rule) != {
         "strategy",
+        "namespace",
         "inputs",
         "prefix",
         "digest_length",
     }:
         return None
     if raw_rule["strategy"] != "sha256":
+        return None
+
+    namespace = raw_rule["namespace"]
+    if not isinstance(namespace, str) or NAMESPACE_PATTERN.fullmatch(namespace) is None:
         return None
 
     raw_inputs = raw_rule["inputs"]
@@ -85,6 +92,7 @@ def _parse_rule(name: Any, raw_rule: Any) -> HeaderRule | None:
 
     return HeaderRule(
         name=name,
+        namespace=namespace,
         inputs=inputs,
         prefix=prefix,
         digest_length=digest_length,
@@ -143,7 +151,7 @@ def _configured_provider_rules() -> dict[str, tuple[HeaderRule, ...]]:
 
 def _render_value(rule: HeaderRule, *, session_id: str, model: str) -> str | None:
     values = {"session_id": session_id, "model": model}
-    selected = [values[name] for name in rule.inputs]
+    selected = [rule.namespace, *(values[name] for name in rule.inputs)]
     if any(not isinstance(value, str) or not value for value in selected):
         return None
     digest = hashlib.sha256("\0".join(selected).encode()).hexdigest()[: rule.digest_length]

@@ -13,12 +13,14 @@ fronting gateway assigns meaning to the configured header.
 [Thunder Forge](https://github.com/shared-goals/thunder-forge) are one tested
 sample, not a hard-coded dependency or required architecture.
 
-Version 0.1.0 is deliberately narrow and fail-closed:
+Version 0.2.0 is deliberately narrow and fail-closed:
 
 - only exact canonical `custom:<name>` provider identities can be configured;
 - no provider is enabled by default, and wildcards and URLs are rejected;
-- every header value is a SHA-256 digest of `session_id` and optional `model`;
-- the header name, input scope, prefix, and digest length are configurable;
+- every header value is a SHA-256 digest of a required installation namespace,
+  `session_id`, and optional `model`;
+- the namespace, header name, input scope, prefix, and digest length are
+  configurable;
 - raw templates, arbitrary Python, environment values, and API keys are not
   supported;
 - existing caller headers are preserved case-insensitively;
@@ -37,16 +39,25 @@ plugins:
           headers:
             X-Conversation-Affinity:
               strategy: sha256
+              namespace: local-instance-a
               inputs:
                 - session_id
               prefix: conversation-
               digest_length: 32
 ```
 
-For `inputs: [session_id, model]`, the digest input is
-`session_id + NUL + model`. Input order is significant. `session_id` is required
-in every rule; `model` is optional. `digest_length` must be between 8 and 64.
-The prefix must contain only printable ASCII and can be empty.
+For `namespace: local-instance-a` and `inputs: [session_id, model]`, the digest
+input is `local-instance-a + NUL + session_id + NUL + model`. The namespace is
+always the first digest component and is never emitted directly. It is a stable,
+non-secret installation identifier containing 1-64 ASCII letters, digits,
+dots, underscores, or hyphens. Input order is significant. `session_id` is
+required in every rule; `model` is optional. `digest_length` must be between 8
+and 64. The prefix must contain only printable ASCII and can be empty.
+
+Use a different namespace for every independent client or Hermes installation
+that shares the same downstream session-key space. Changing a namespace starts
+a new affinity namespace, so the first request in each existing conversation
+will be a sticky miss before subsequent turns become hits.
 
 Configuration is validated as a whole when Hermes registers the plugin. A
 missing or malformed plugin entry, provider identity, header name, or value rule
@@ -76,6 +87,7 @@ plugins:
           headers:
             X-Olla-Session-ID:
               strategy: sha256
+              namespace: chez
               inputs:
                 - session_id
                 - model
@@ -86,7 +98,7 @@ plugins:
 For a given Hermes conversation and effective model alias, this produces:
 
 ```text
-hermes-<first 32 lowercase hex characters of sha256(session_id + NUL + model)>
+hermes-<first 32 lowercase hex characters of sha256(chez + NUL + session_id + NUL + model)>
 ```
 
 Replace `custom:thunder-forge` with the exact identity of your own named custom
@@ -175,6 +187,17 @@ custom_providers:
 Keep the real value in `~/.hermes/.env`; do not put it in `config.yaml`, plugin
 configuration, logs, or this repository.
 
+When another Hermes installation such as Shag uses the same provider, give it a
+different namespace while keeping the public header format unchanged:
+
+```yaml
+namespace: shag
+prefix: hermes-
+```
+
+Provider credentials should also be distinct for authentication and accounting,
+but different API keys do not replace the session namespace.
+
 Select a provider explicitly when it is not the default:
 
 ```bash
@@ -225,6 +248,7 @@ plugins:
           headers:
             X-Session-ID:  # replace with the header your gateway consumes
               strategy: sha256
+              namespace: local-instance-a
               inputs:
                 - session_id
                 - model
@@ -267,6 +291,10 @@ ignored, but it does not create affinity by itself. The downstream component
 must document and implement the semantics.
 
 ## Update and rollback
+
+When updating from 0.1.0, first add a unique `namespace` to every configured
+header rule. Then update the plugin and restart Hermes. Version 0.2.0 rejects
+the old namespace-free configuration and injects no headers.
 
 ```bash
 hermes plugins update hermes-custom-header-plugin

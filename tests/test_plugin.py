@@ -19,6 +19,7 @@ PLUGIN_NAME = "hermes-custom-header-plugin"
 
 def header_rule(
     *,
+    namespace: str = "installation-a",
     inputs: list[str] | None = None,
     prefix: str = "hermes-",
     digest_length: int = 32,
@@ -26,6 +27,7 @@ def header_rule(
 ) -> dict[str, Any]:
     return {
         "strategy": strategy,
+        "namespace": namespace,
         "inputs": inputs if inputs is not None else ["session_id", "model"],
         "prefix": prefix,
         "digest_length": digest_length,
@@ -117,7 +119,7 @@ def test_versions_and_manifest_are_consistent(monkeypatch: Any) -> None:
     assert manifest == {
         "manifest_version": 1,
         "name": PLUGIN_NAME,
-        "version": "0.1.0",
+        "version": "0.2.0",
         "description": "Add computed request headers to explicitly configured custom providers",
     }
     assert manifest["version"] == project["project"]["version"]
@@ -143,7 +145,7 @@ def test_matching_provider_injects_configured_header_without_mutation(monkeypatc
 
     assert result is not None
     assert result["source"] == PLUGIN_NAME
-    expected_digest = hashlib.sha256(b"session-alpha\0agent-better").hexdigest()[:32]
+    expected_digest = hashlib.sha256(b"installation-a\0session-alpha\0agent-better").hexdigest()[:32]
     assert result["request"]["extra_headers"] == {
         "X-Trace-ID": "trace-1",
         "X-Olla-Session-ID": f"hermes-{expected_digest}",
@@ -184,7 +186,7 @@ def test_header_name_and_value_recipe_are_configurable(monkeypatch: Any) -> None
     result = callback(request={}, session_id="session-alpha", model="agent", base_url="http://lab/v1")
 
     assert result is not None
-    expected = hashlib.sha256(b"session-alpha").hexdigest()[:16]
+    expected = hashlib.sha256(b"installation-a\0session-alpha").hexdigest()[:16]
     assert result["request"]["extra_headers"] == {"X-Local-Affinity": f"conversation-{expected}"}
 
 
@@ -243,11 +245,17 @@ def test_missing_or_empty_configuration_fails_closed_without_lookup(monkeypatch:
 
 
 def test_malformed_provider_or_rule_configuration_fails_closed(monkeypatch: Any) -> None:
+    missing_namespace = header_rule()
+    del missing_namespace["namespace"]
     invalid_provider_configs = [
         {"*": {"headers": {"X-Test": header_rule()}}},
         {"custom:provider": {"headers": {"Authorization": header_rule()}}},
         {"custom:provider": {"headers": {"Bad Header": header_rule()}}},
         {"custom:provider": {"headers": {"X-Test": header_rule(strategy="raw")}}},
+        {"custom:provider": {"headers": {"X-Test": missing_namespace}}},
+        {"custom:provider": {"headers": {"X-Test": header_rule(namespace="")}}},
+        {"custom:provider": {"headers": {"X-Test": header_rule(namespace="bad namespace")}}},
+        {"custom:provider": {"headers": {"X-Test": header_rule(namespace="a" * 65)}}},
         {"custom:provider": {"headers": {"X-Test": header_rule(inputs=[])}}},
         {"custom:provider": {"headers": {"X-Test": header_rule(inputs=["model"])}}},
         {"custom:provider": {"headers": {"X-Test": header_rule(inputs=["session_id", "unknown"])}}},
@@ -362,6 +370,23 @@ def test_value_scope_and_format(monkeypatch: Any) -> None:
     assert re.fullmatch(r"hermes-[0-9a-f]{32}", first)
 
 
+def test_namespace_isolates_identical_session_and_model(monkeypatch: Any) -> None:
+    first_config = plugin_config(
+        {"custom:thunder-forge": {"headers": {"X-Olla-Session-ID": header_rule(namespace="chez")}}}
+    )
+    second_config = plugin_config(
+        {"custom:thunder-forge": {"headers": {"X-Olla-Session-ID": header_rule(namespace="shag")}}}
+    )
+    first_callback = registered_callback(load_plugin(monkeypatch, lambda _: "custom:thunder-forge", first_config))
+    second_callback = registered_callback(load_plugin(monkeypatch, lambda _: "custom:thunder-forge", second_config))
+
+    first = first_callback(request={}, session_id="shared-id", model="agent", base_url="http://tf/v1")
+    second = second_callback(request={}, session_id="shared-id", model="agent", base_url="http://tf/v1")
+
+    assert first is not None and second is not None
+    assert first["request"]["extra_headers"] != second["request"]["extra_headers"]
+
+
 def test_session_only_recipe_is_stable_across_models(monkeypatch: Any) -> None:
     config = plugin_config(
         {"custom:local-lab": {"headers": {"X-Conversation": header_rule(inputs=["session_id"], prefix="session-")}}}
@@ -376,14 +401,19 @@ def test_session_only_recipe_is_stable_across_models(monkeypatch: Any) -> None:
 
 
 def test_value_exposes_no_raw_inputs_or_secret_fixtures(monkeypatch: Any) -> None:
-    callback = registered_callback(load_plugin(monkeypatch, lambda _: "custom:thunder-forge"))
     session_id = "private-session-name"
     model = "private-model-alias"
     endpoint = "http://private-endpoint.example/v1"
     secret = "provider-secret-fixture"
+    namespace = "private-installation-name"
+
+    config = plugin_config(
+        {"custom:thunder-forge": {"headers": {"X-Olla-Session-ID": header_rule(namespace=namespace)}}}
+    )
+    callback = registered_callback(load_plugin(monkeypatch, lambda _: "custom:thunder-forge", config))
 
     result = callback(request={}, session_id=session_id, model=model, base_url=endpoint, api_key=secret)
 
     assert result is not None
     value = result["request"]["extra_headers"]["X-Olla-Session-ID"]
-    assert all(raw not in value for raw in (session_id, model, endpoint, secret))
+    assert all(raw not in value for raw in (namespace, session_id, model, endpoint, secret))
