@@ -61,8 +61,9 @@ If the named provider already exists, keep it and add only the plugin entry.
 Provider credentials remain in `~/.hermes/.env`; this plugin has no environment
 variables of its own.
 
-The provider key must be the canonical `custom:<provider-name>` identity. A
-provider named `thunder-forge` therefore uses `custom:thunder-forge`.
+The key under the plugin's `providers` mapping must exactly match Hermes'
+`model.provider` value. For example, if `model.provider` is
+`custom:thunder-forge`, use `custom:thunder-forge` as the key.
 
 ### 3. Restart Hermes
 
@@ -79,7 +80,7 @@ configuration. A new CLI process loads them on startup.
 Hermes passes the effective model to the middleware. The plugin does not select,
 alias, or configure models.
 
-For one session, Chez produces separate sticky keys for its two model aliases:
+For one session, different model aliases produce separate sticky keys:
 
 ```text
 20260715_210001_a1b2c3:agent-better
