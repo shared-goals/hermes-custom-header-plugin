@@ -35,8 +35,8 @@ only maps the exact named provider identity to a header name:
 ```yaml
 model:
   provider: custom:thunder-forge
-  default: agent-better
-  coding: coder-better
+  default: agent
+  coding: coder
 
 custom_providers:
   - name: thunder-forge
@@ -44,10 +44,10 @@ custom_providers:
     key_env: TF_USER_HERMES
     api_mode: chat_completions
     models:
-      - name: agent-better
-        model: agent-better
-      - name: coder-better
-        model: coder-better
+      - name: agent
+        model: Qwen3.6-35B-A3B-mxfp8
+      - name: coder
+        model: Qwen3-Coder-Next-mxfp8
 
 plugins:
   entries:
@@ -83,15 +83,15 @@ alias, or configure models.
 For one session, different model aliases produce separate sticky keys:
 
 ```text
-20260715_210001_a1b2c3:agent-better
-20260715_210001_a1b2c3:coder-better
+20260715_210001_a1b2c3:agent
+20260715_210001_a1b2c3:coder
 ```
 
 Switch explicitly with:
 
 ```text
-/model custom:thunder-forge:agent-better
-/model custom:thunder-forge:coder-better
+/model custom:thunder-forge:agent
+/model custom:thunder-forge:coder
 ```
 
 The same session and model always produce the same value. Changing either one
@@ -141,9 +141,9 @@ Hermes Agent -> Thunder Forge edge -> Olla -> inference endpoints
 
 Verify with a safe conversation while the chosen endpoint remains healthy:
 
-1. Send a turn with `agent-better`; expect a sticky miss.
+1. Send a turn with `agent`; expect a sticky miss.
 2. Send another turn in the same Hermes session and model; expect a hit.
-3. Switch the same session to `coder-better`; expect a different sticky key and
+3. Switch the same session to `coder`; expect a different sticky key and
    a separate miss followed by hits.
 4. Start another Hermes session; expect another key.
 
