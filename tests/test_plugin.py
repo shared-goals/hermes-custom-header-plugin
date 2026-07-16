@@ -113,6 +113,29 @@ def test_versions_and_manifest_are_consistent(monkeypatch: Any) -> None:
     assert "requires_env" not in manifest
 
 
+def test_ci_covers_every_declared_python_version() -> None:
+    project = tomllib.loads((ROOT / "pyproject.toml").read_text())
+    workflow = yaml.safe_load((ROOT / ".github" / "workflows" / "ci.yml").read_text())
+    classifier_prefix = "Programming Language :: Python :: "
+    declared_versions = set()
+    for classifier in project["project"]["classifiers"]:
+        version = classifier.removeprefix(classifier_prefix)
+        if classifier.startswith(classifier_prefix) and re.fullmatch(r"\d+\.\d+", version):
+            declared_versions.add(version)
+    tested_versions = set(workflow["jobs"]["test"]["strategy"]["matrix"]["python-version"])
+
+    assert declared_versions <= tested_versions
+
+
+def test_readme_documents_the_canonical_plugin_provider_identity() -> None:
+    readme = " ".join((ROOT / "README.md").read_text().split())
+
+    assert "canonical `custom:<name>` identity" in readme
+    assert "`model.provider` may be `thunder-forge` or `custom:thunder-forge`" in readme
+    assert "the plugin key is `custom:thunder-forge` in both cases" in readme
+    assert "must exactly match Hermes' `model.provider` value" not in readme
+
+
 def test_matching_provider_injects_session_and_model_without_mutation(monkeypatch: Any) -> None:
     lookup_calls: list[str] = []
     module = load_plugin(monkeypatch, lambda base_url: lookup_calls.append(base_url) or "custom:thunder-forge")

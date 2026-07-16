@@ -61,9 +61,12 @@ If the named provider already exists, keep it and add only the plugin entry.
 Provider credentials remain in `~/.hermes/.env`; this plugin has no environment
 variables of its own.
 
-The key under the plugin's `providers` mapping must exactly match Hermes'
-`model.provider` value. For example, if `model.provider` is
-`custom:thunder-forge`, use `custom:thunder-forge` as the key.
+The key under the plugin's `providers` mapping is the
+canonical `custom:<name>` identity returned by
+`hermes_cli.runtime_provider.find_custom_provider_identity()`. This is
+independent of how the provider is selected: `model.provider` may be
+`thunder-forge` or `custom:thunder-forge`, but the plugin key is
+`custom:thunder-forge` in both cases.
 
 ### 3. Restart Hermes
 
