@@ -37,10 +37,10 @@ package = false
 
 [dependency-groups]
 dev = [
-    "coverage>=7.6",
+    "coverage>=7.15.2",
     "pytest>=8.0",
     "pyyaml>=6.0",
-    "ruff>=0.15",
+    "ruff>=0.15.22",
 ]
 
 [tool.pytest.ini_options]
